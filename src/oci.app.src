@@ -1,0 +1,12 @@
+{application, oci,
+ [
+  {description, "Erlang OCI"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { oci_app, []}},
+  {env, []}
+ ]}.

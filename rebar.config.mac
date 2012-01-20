@@ -1,0 +1,8 @@
+{port_sources, ["c_src/*.cpp"]}.
+{port_envs, [
+    {"CXXFLAGS", "$CXXFLAGS -Ilib/instantclient/include -Ideps/threadpool/src"},
+    {"DRV_LDFLAGS", "$ERL_LDFLAGS -Llib/instantclient -locci -lclntsh -lnnz10 -lpthread"},
+    {"LINK_TEMPLATE",
+         "$CXX $PORT_IN_FILES $LDFLAGS $DRV_LDFLAGS -o $PORT_OUT_FILE"}
+]}.
+{so_name, "erloci"}.
