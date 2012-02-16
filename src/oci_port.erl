@@ -68,19 +68,24 @@ call(PortPid, SessionId, Msg) ->
 init([PortMod]) ->
     case os:find_executable(?EXE_NAME, "./priv/") of
         false ->
-            {stop, bad_executable};
-        Executable ->
-            PortOptions = [{packet, 4}, binary, exit_status, use_stdio, {args, [ "true" ]}],
-            case (catch PortMod:open_port({spawn_executable, Executable}, PortOptions)) of
-                {'EXIT', Reason} ->
-                    io:fwrite("oci could not open port: ~p~n", [Reason]),
-                    {stop, Reason};
-                Port ->
-                    io:fwrite("oci:init opened new port: ~p~n", [PortMod:port_info(Port)]),
-                    %% TODO -- Loggig it turned after port creation for the integration tests too run
-                    PortMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_OFF})),
-                    {ok, #state{status=connected, port=Port, port_mod=PortMod}}
-            end
+            case os:find_executable(?EXE_NAME, "./deps/erloci/priv/") of
+                false -> {stop, bad_executable};
+                Executable -> start_exe(PortMod, Executable)
+            end;
+        Executable -> start_exe(PortMod, Executable)
+    end.
+
+start_exe(PortMod, Executable) ->
+    PortOptions = [{packet, 4}, binary, exit_status, use_stdio, {args, [ "true" ]}],
+    case (catch PortMod:open_port({spawn_executable, Executable}, PortOptions)) of
+        {'EXIT', Reason} ->
+            io:fwrite("oci could not open port: ~p~n", [Reason]),
+            {stop, Reason};
+        Port ->
+            io:fwrite("oci:init opened new port: ~p~n", [PortMod:port_info(Port)]),
+            %% TODO -- Loggig it turned after port creation for the integration tests too run
+            PortMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_OFF})),
+            {ok, #state{status=connected, port=Port, port_mod=PortMod}}
     end.
 %% We force some Port commands to be executed in a
 %% synchronous manner, the main reason for this is
