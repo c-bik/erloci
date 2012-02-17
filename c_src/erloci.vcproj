@@ -60,6 +60,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalDependencies="ei_md.lib erl_interface_md.lib wsock32.lib oci.lib"
+				OutputFile="$(SolutionDir)..\priv\$(ProjectName).exe"
 				AdditionalLibraryDirectories="D:/Programs/Oracle/instantclient_11_2/sdk/lib/msvc;&quot;D:\Programs\erl5.9\lib\erl_interface-3.7.6\lib&quot;"
 				IgnoreDefaultLibraryNames="libcmt.lib;msvcrt.lib"
 				GenerateDebugInformation="true"

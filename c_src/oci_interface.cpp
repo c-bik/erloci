@@ -389,6 +389,15 @@ ROW_FETCH oci_produce_rows(void * stmt_handle, void * row_list)
     /* Bind appropriate variables for data based on the column type */
     for (i = 0; i < num_cols; ++i)
         switch (columns[i].dtype) {
+		case SQLT_DAT:
+		//{
+  //          data_row[i] = (text *) malloc((columns[i].dlen + 1) * sizeof(text));
+  //          checkerr(errhp, OCIDefineByPos(stmthp, &(defnhp[i]), errhp, i+1, (dvoid *) (data_row[i]),
+  //                                         (sword) columns[i].dlen + 1, SQLT_DAT, (dvoid *) 0, (ub2 *)0,
+  //                                         (ub2 *)0, OCI_DEFAULT));
+  //          if(function_success != SUCCESS) return ERROR;
+  //      }
+  //      break;
         case SQLT_NUM:
         case SQLT_CHR: {
             data_row[i] = (text *) malloc((columns[i].dlen + 1) * sizeof(text));
@@ -410,6 +419,7 @@ ROW_FETCH oci_produce_rows(void * stmt_handle, void * row_list)
         for (i = 0; i < num_cols; ++i)
             if (res != OCI_NO_DATA)
                 switch (columns[i].dtype) {
+				case SQLT_DAT:
                 case SQLT_NUM:
                 case SQLT_CHR:
                     append_string_to_list((char*)data_row[i], &row);
