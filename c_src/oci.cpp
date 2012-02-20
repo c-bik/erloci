@@ -24,7 +24,10 @@
 #ifdef __WIN32__
 #include <io.h>
 #include <fcntl.h>
+#include <share.h>
 #endif
+
+#include <time.h>
 
 typedef unsigned char byte;
 
@@ -54,10 +57,20 @@ int main(int argc, char * argv[])
 
 #if DEBUG < DBG_5
 #ifdef __WIN32__
-    fopen_s(&fp_log, "oci.log", "w");
+	time_t seconds;
+	seconds = time(NULL);
+	char log_file_name[1024];
+	sprintf_s(log_file_name, 1024, "oci_%d.log", seconds);
+    fp_log = _fsopen(log_file_name, "w", _SH_DENYNO);
+	setvbuf(fp_log, NULL, _IOFBF, 5);
 #else
     fp_log = fopen("oci.log", "w");
 #endif
+#endif
+
+#if DEBUG < DBG_5
+	fprintf(fp_log, "Started....\n");
+    fflush(fp_log);
 #endif
 
     erl_init(NULL, 0);
@@ -85,11 +98,6 @@ int main(int argc, char * argv[])
 
     oci_init();
     REMOTE_LOG("Port: Initialized Oracle OCI");
-
-#if DEBUG < DBG_5
-    fprintf(fp_log, "Started...\n");
-    fflush(fp_log);
-#endif
 
     while(!exit_loop && (cmd_tuple = (ETERM *)read_cmd()) != NULL) {
 #ifdef THREAD
