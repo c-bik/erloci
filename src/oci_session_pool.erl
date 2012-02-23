@@ -122,7 +122,7 @@ handle_call(get_session, _From, #state{port=PortPid} = State) ->
     %% oci_session:new() though, we use the tuple notation
     %% directly. this lets you call every function in oci_session
     %% by giving the SessionPid as a last parameter, therefore:
-    %% Session:get_rows() == oci_session:get_rows(SessionPid)
+    %% Session:next_rows() == oci_session:next_rows(SessionPid)
     {reply, {oci_session, SessionPid}, State};
 
 handle_call(enable_log, _From, #state{port=PortPid} = State) ->
@@ -160,22 +160,55 @@ integration_test(Host, Port, Service, UserName, Password) ->
     ok = Session:execute_sql("create table test_erloci(pkey number,  publisher varchar2(100), rank number, hero varchar2(100), real varchar2(100), votes number, votes_first_rank number)", [], 10),
     insert_rows(Session),
     ok = Session:execute_sql("select * from test_erloci", [], 10),
-    [true] = sets:to_list(sets:from_list([Session:get_rows() /= [] || _ <- lists:seq(1,10)])),
-    [] = Session:get_rows(),
+    [true] = sets:to_list(sets:from_list([Session:next_rows() /= [] || _ <- lists:seq(1,10)])),
+    [] = Session:next_rows(),
     stopped = Session:close(),
     stopped = oci_session_pool:stop(Pool).
 
 mock_test() ->
     {ok, Pool} = oci_session_pool:start_link("127.0.0.1", 1521, {service, "db.local"}, "dba", "supersecret", [{port_options, [{mock_port, oci_port_mock}]}]),
     Session = oci_session_pool:get_session(Pool),
-    ok = Session:execute_sql("select * from test_erloci", [], 10),
-    [true] = sets:to_list(sets:from_list([Session:get_rows() /= [] || _ <- lists:seq(1,10)])),
-    [] = Session:get_rows(),
 
-    %% odd max_num
-    ok = Session:execute_sql("select * from test_erloci", [], 3),
-    [true] = sets:to_list(sets:from_list([Session:get_rows() /= [] || _ <- lists:seq(1,34)])),
-    [] = Session:get_rows(),
+    %% no cache
+    {statement, Statement1} = Session:execute_sql("select * from test_erloci", [], 10),
+    [true] = sets:to_list(sets:from_list([Statement1:next_rows() /= [] || _ <- lists:seq(1,10)])),
+    [] = Statement1:next_rows(),
+    ok = Statement1:close(),
+
+    %% no cache, odd max_num
+    {statement, Statement2} = Session:execute_sql("select * from test_erloci", [], 3),
+    [true] = sets:to_list(sets:from_list([Statement2:next_rows() /= [] || _ <- lists:seq(1,34)])),
+    [] = Statement2:next_rows(),
+    ok = Statement2:close(),
+
+    %% use cache
+    {statement, Statement3} = Session:execute_sql("select * from test_erloci", [], 10, true),
+    [true] = sets:to_list(sets:from_list([Statement3:next_rows() /= [] || _ <- lists:seq(1,10)])),
+    [] = Statement3:next_rows(),
+    ok = Statement3:close(),
+
+    %% use cache , odd max_num
+    {statement, Statement4} = Session:execute_sql("select * from test_erloci", [], 3, true),
+    [true] = sets:to_list(sets:from_list([Statement4:next_rows() /= [] || _ <- lists:seq(1,34)])),
+    [] = Statement4:next_rows(),
+    ok = Statement4:close(),
+
+    %% use cache with prev
+    {statement, Statement5} = Session:execute_sql("select * from test_erloci", [], 10, true),
+    [true] = sets:to_list(sets:from_list([Statement5:next_rows() /= [] || _ <- lists:seq(1,10)])),
+    [] = Statement5:next_rows(),
+    [true] = sets:to_list(sets:from_list([Statement5:prev_rows() /= [] || _ <- lists:seq(1,9)])),
+    [] = Statement5:prev_rows(),
+    ok = Statement5:close(),
+
+    %% use cache with prev
+    {statement, Statement6} = Session:execute_sql("select * from test_erloci", [], 3, true),
+    [true] = sets:to_list(sets:from_list([Statement6:next_rows() /= [] || _ <- lists:seq(1,34)])),
+    [] = Statement6:next_rows(),
+    [true] = sets:to_list(sets:from_list([Statement6:prev_rows() /= [] || _ <- lists:seq(1,33)])),
+    [] = Statement6:prev_rows(),
+    ok = Statement6:close(),
+
     stopped = Session:close(),
     stopped = oci_session_pool:stop(Pool).
 

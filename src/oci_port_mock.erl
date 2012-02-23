@@ -16,41 +16,54 @@
 -compile([export_all]).
 
 -include("oci.hrl").
+-include_lib("stdlib/include/qlc.hrl").
 
 -define(SessionId, 112233).
 -define(Statement, 223344).
 
 open_port({spawn_executable, _Executable}, _Options) ->
-    Port = fun(F) ->
+    Port = fun
+        (F, undefined) ->
+            QH = qlc:q([R||R<-rows()]),
+            F(F, qlc:cursor(QH));
+        (F, C) ->
             receive
                 {port_cmd, Pid, {?R_DEBUG_MSG, 0}} ->
-                    reply(Pid, F, {?R_DEBUG_MSG, ok, log_disabled});
+                    reply(Pid, F, C, {?R_DEBUG_MSG, ok, log_disabled});
                 {port_cmd, Pid, {?R_DEBUG_MSG, 1}} ->
-                    reply(Pid, F, {?R_DEBUG_MSG, ok, log_enabled});
+                    reply(Pid, F, C, {?R_DEBUG_MSG, ok, log_enabled});
                 {port_cmd, Pid, {?CREATE_SESSION_POOL,_,_,_,_}} ->
-                    reply(Pid, F, {?CREATE_SESSION_POOL, ok, "mock_pool"});
+                    reply(Pid, F, C, {?CREATE_SESSION_POOL, ok, "mock_pool"});
                 {port_cmd, Pid, {?RELEASE_SESSION_POOL}} ->
-                    reply(Pid, F, {?RELEASE_SESSION_POOL, ok});
+                    reply(Pid, F, C, {?RELEASE_SESSION_POOL, ok});
                 {port_cmd, Pid, {?GET_SESSION}} ->
-                    reply(Pid, F, {?GET_SESSION, ok, ?SessionId});
+                    reply(Pid, F, C, {?GET_SESSION, ok, ?SessionId});
                 {port_cmd, Pid, {?RELEASE_SESSION, ?SessionId}} ->
-                    reply(Pid, F, {?RELEASE_SESSION, ?SessionId, {ok}});
+                    reply(Pid, F, C, {?RELEASE_SESSION, ?SessionId, {ok}});
                 {port_cmd, Pid, {?RELEASE_SESSION, _}} ->
-                    reply(Pid, F, {?RELEASE_SESSION, ?SessionId, {error, mock_error_wrong_session}});
+                    reply(Pid, F, C, {?RELEASE_SESSION, ?SessionId, {error, mock_error_wrong_session}});
                 {port_cmd, Pid, {?EXEC_SQL, ?SessionId, _, []}} ->
-                    reply(Pid, F, {?EXEC_SQL, ?SessionId, {columns, ?Statement, columns()}});
+                    reply(Pid, F, C, {?EXEC_SQL, ?SessionId, {columns, ?Statement, columns()}});
                 {port_cmd, Pid, {?EXEC_SQL, ?SessionId, _, _}} ->
-                    reply(Pid, F, {?EXEC_SQL, ?SessionId, {executed, "Batman"}});
+                    reply(Pid, F, C, {?EXEC_SQL, ?SessionId, {executed, "Batman"}});
                 {port_cmd, Pid, {?FETCH_ROWS, ?SessionId, ?Statement}} ->
-                    reply(Pid, F, {?FETCH_ROWS, ?SessionId, {{rows, rows()}, done}});
+                    Rows = qlc:next_answers(C, 10),
+                    {QStatus, NewC} =
+                    case length(Rows) of
+                       L when L < 10 ->
+                            {done, undefined}; %% cursor will be reinitialized
+                       L when L == 10 ->
+                            {more, C}
+                    end,
+                    reply(Pid, F, NewC, {?FETCH_ROWS, ?SessionId, {{rows, Rows}, QStatus}});
                 {port_stop, Pid} ->
                     Pid ! ok;
                 M ->
                     io:format("unrecognized port command ~p~n", [M]),
-                    F(F)
+                    F(F, C)
             end
     end,
-    spawn(fun() -> Port(Port) end).
+    spawn(fun() -> Port(Port, undefined) end).
 
 port_close(Port) ->
     Port ! {port_stop, self()}.
@@ -62,9 +75,9 @@ port_command(Port, Msg) ->
     Port ! {port_cmd, self(), binary_to_term(Msg)},
     true.
 
-reply(Pid, F, Msg) ->
+reply(Pid, F, C, Msg) ->
     Pid ! {self(), {data, term_to_binary(Msg)}},
-    F(F).
+    F(F, C).
 
 columns() ->
     [

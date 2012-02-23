@@ -20,7 +20,9 @@
 %% API
 -export([
     execute_sql/4,
-    get_rows/1,
+    execute_sql/5,
+    next_rows/1,
+    prev_rows/1,
     open/2,
     close/1,
     get_columns/1]).
@@ -39,10 +41,19 @@
     port,
     pool,
     session_id,
-    result_set = [],
-    statement,
+    statements = []
+}).
+-record(statement, {
+    ref,
+    handle,
     max_rows,
-    columns = []
+    columns,
+    results,
+    cache_size = 0,
+    use_cache = false,
+    cursor = {0, {}, more}
+
+
 }).
 
 %% External API
@@ -52,10 +63,12 @@
 open(Port, Pool) ->
     gen_server:start(?MODULE, [Port, Pool], []).
 
-%% @doc closes a session, can be used in a parameterized fashion Session:close()
--spec close(Session::session()) -> stopped.
+%% @doc closes a session, can be used in a parameterized fashion Session:close() or Statement:close()
+-spec close(session() | statement()) -> stopped|ok.
 close({?MODULE, Pid}) ->
-    gen_server:call(Pid, stop).
+    gen_server:call(Pid, stop);
+close({?MODULE, StatementRef, Pid}) ->
+    gen_server:call(Pid, {close_statement, StatementRef}).
 
 %% @doc Executes an UPDATE/DELETE/INSERT SQL query, can be used in a parameterized fashion Session:execute_sql(...)
 -spec execute_sql(Query :: string()|binary(),
@@ -66,31 +79,37 @@ close({?MODULE, Pid}) ->
         }],
     MaxRows :: integer(),
     Session :: session()) ->
-    {ok, StatementHandle :: integer()} |
+    {statement, statement()} |
     {ok, RetArgs :: [integer()|float()|string()]} |
     {error, Reason :: ora_error()}.
 execute_sql(Query, Params, MaxRows, {?MODULE, Pid}) when is_list(Query) ->
-    gen_server:call(Pid, {execute_sql, Query, Params, MaxRows}).
+    execute_sql(Query, Params, MaxRows, false, {?MODULE, Pid}).
+execute_sql(Query, Params, MaxRows, UseCache, {?MODULE, Pid}) when is_list(Query) ->
+    gen_server:call(Pid, {execute_sql, Query, Params, MaxRows, UseCache}).
 
 %% @doc Fetches the resulting rows of a previously executed sql statement, can be used in a parameterized fashion Session:get_rows()
--spec get_rows(Session::session()) ->  [Row::tuple()] | {error, Reason::ora_error()}.
-get_rows({?MODULE, Pid}) ->
-    gen_server:call(Pid, get_rows).
+-spec next_rows(Statement::statement()) ->  [Row::tuple()] | {error, Reason::ora_error()}.
+next_rows({?MODULE, StatementRef, Pid}) ->
+    gen_server:call(Pid, {next_rows, StatementRef}).
+
+prev_rows({?MODULE, StatementRef, Pid}) ->
+    gen_server:call(Pid, {prev_rows, StatementRef}).
 
 %% @doc Fetches the column information of the last executed query, can be used in a parameterized fashion Session:get_columns()
--spec get_columns(Session::session()) -> [{ColumnName::string(), Type::atom(), Length::integer()}].
-get_columns({?MODULE, Pid}) ->
-    gen_server:call(Pid, get_columns).
+-spec get_columns(Statement::statement()) -> [{ColumnName::string(), Type::atom(), Length::integer()}].
+get_columns({?MODULE, StatementRef, Pid}) ->
+    gen_server:call(Pid, {get_columns, StatementRef}).
 
 %% Callbacks
 init([Port, Pool]) ->
     {ok, SessionId} = oci_port:call(Port, {?GET_SESSION}),
     {ok, #state{port=Port, pool=Pool, session_id=SessionId, status=open}}.
 
-handle_call(get_columns, _From, #state{columns=Columns} = State) ->
-    {reply, {ok, Columns}, State};
+handle_call({get_columns, StatementRef}, _From, #state{statements=Statements} = State) ->
+    S = proplists:get_value(StatementRef, Statements),
+    {reply, {ok, S#statement.columns}, State};
 
-handle_call({execute_sql, Query, Params, MaxRows}, _From, #state{session_id=SessionId, port=Port, result_set=[]} = State) ->
+handle_call({execute_sql, Query, Params, MaxRows, UseCache}, _From, #state{session_id=SessionId, port=Port} = State) ->
     CorrectedParams =
     case re:run(Query, "([:])", [global]) of
         {match, ArgList} ->
@@ -102,35 +121,112 @@ handle_call({execute_sql, Query, Params, MaxRows}, _From, #state{session_id=Sess
         nomatch ->
             []
     end,
-    {reply, Reply, NewState} = exec(State, Port, SessionId, Query, CorrectedParams),
-    {reply, Reply, NewState#state{result_set=[], max_rows=MaxRows}};
+    exec(State, Port, SessionId, Query, CorrectedParams, MaxRows, UseCache);
+handle_call({prev_rows, StatementRef}, _From, #state{statements=Statements} = State) ->
+    Statement = proplists:get_value(StatementRef, Statements),
+    #statement{
+        results=Results,
+        use_cache=UseCache,
+        cursor={Offset, Cursor, QStatus},
+        max_rows=MaxRows
+    } = Statement,
 
-handle_call(get_rows, _From, #state{max_rows=MaxRows, result_set=ResultSet, statement=undefined} = State) when length(ResultSet) =< MaxRows ->
-    {reply, ResultSet, State#state{result_set=[]}};
-handle_call(get_rows, _From, #state{max_rows=MaxRows, result_set=ResultSet} = State) when length(ResultSet) > MaxRows ->
-    {Ret, RestRows} = lists:split(MaxRows, ResultSet),
-    {reply, Ret, State#state{result_set=RestRows}};
-handle_call(get_rows, _From, #state{max_rows=MaxRows, result_set=ResultSet0, port=Port, statement=Statement, session_id=SessionId} = State) when Statement /= undefined->
-    case oci_port:call(Port, SessionId, {?FETCH_ROWS, SessionId, Statement}) of
-        {{rows, Rows}, QStatus} ->
-            ResultSet = ResultSet0 ++ Rows,
-            {ReturnedRes, Rest} =
-            if length(ResultSet) > MaxRows ->
-                lists:split(MaxRows, ResultSet);
-            true ->
-                {ResultSet, []}
+    case UseCache of
+        true ->
+            {NewOffset, Keys} =
+            case Offset - MaxRows of
+                R when R > 0 ->
+                    K = get_keys(Offset-MaxRows-MaxRows+1, Offset-MaxRows),
+                    {Offset-length(K), K};
+                R when R < 0 ->
+                    K = get_keys(1, Offset),
+                    {0, K};
+                0 ->
+                    {0, []}
             end,
-            case QStatus of
-                more ->
-                    {reply, ReturnedRes, State#state{result_set=Rest}};
-                done ->
-                    {reply, ReturnedRes, State#state{result_set=Rest, statement=undefined}}
-            end;
-        {error, Reason} ->
-            {reply, {error, Reason}, State#state{result_set=[], statement=undefined}}
+            Rows = [ets:lookup_element(Results, K1, 2)||K1<-Keys],
+            BinRef =
+            case Cursor of
+                {_,_,_,_,B,_,_,_} ->
+                    B;
+                {'$end_of_table', B} ->
+                    B
+            end,
+            NewCursor = {Results, NewOffset, [], MaxRows, BinRef, [], 0, 0},
+            NewStatement = Statement#statement{
+                cursor={NewOffset, NewCursor, QStatus}},
+            NewStatements = proplists:delete(StatementRef, Statements) ++ [{StatementRef, NewStatement}],
+            {reply, Rows, State#state{statements=NewStatements}};
+        false ->
+            {reply, [], State}
     end;
-handle_call(get_rows, _From, #state{result_set=[], statement=undefined} = State) ->
-    {reply, {error, no_statement}, State};
+
+handle_call({next_rows, StatementRef}, _From, #state{port=Port, session_id=SessionId, statements=Statements} = State) ->
+    Statement = proplists:get_value(StatementRef, Statements),
+    #statement{
+        handle=StatementHandle,
+        results=Results,
+        cache_size=CacheSize,
+        use_cache=UseCache,
+        cursor={Offset, Cursor, QStatus},
+        max_rows=MaxRows
+    } = Statement,
+
+    {NewQStatus, NrOfNewCacheEntries} =
+    case
+        ((size(Cursor) > 2) or (Cursor == {}))and
+        (QStatus == more) and
+        ((CacheSize - Offset) =< MaxRows)
+    of
+        true ->
+            fetch(Port, SessionId, StatementHandle, Results, CacheSize);
+        false ->
+            {QStatus, 0}
+    end,
+
+    {Rows, NewCursor} =
+    case Cursor of
+        {'$end_of_table', BinRef} ->
+            {[], {'$end_of_table', BinRef}};
+        {} ->
+            ets:match_object(Results, '$1', MaxRows);
+        Cursor when (UseCache == false) and (NrOfNewCacheEntries > 0) ->
+            ets:match_object(Results, '$1', MaxRows);
+        Cursor ->
+            {_,_,_,_,BinRef,_,_,_} = Cursor,
+            case ets:match_object(Cursor) of
+                '$end_of_table' ->
+                    {[], {'$end_of_table', BinRef}};
+                {R, '$end_of_table'} ->
+                    {R, {'$end_of_table', BinRef}};
+                Res ->
+                    Res
+            end
+    end,
+
+    %% delete results if no_cache
+    case UseCache of
+        false ->
+            [ets:delete(Results, I) || {I,_} <- Rows];
+        true ->
+            ok
+    end,
+
+    NewStatement = Statement#statement{
+        cache_size=CacheSize + NrOfNewCacheEntries,
+        cursor={Offset + length(Rows), NewCursor, NewQStatus}},
+    NewStatements = proplists:delete(StatementRef, Statements) ++ [{StatementRef, NewStatement}],
+    RetRows = [R || {_,R} <-Rows],
+    {reply, RetRows, State#state{statements=NewStatements}};
+
+handle_call({close_statement, StatementRef}, _From, #state{statements=Statements} = State) ->
+    Statement = proplists:get_value(StatementRef, Statements),
+    #statement{
+        results=Results
+    } = Statement,
+    ets:delete(Results),
+    NewStatements = proplists:delete(StatementRef, Statements),
+    {reply, ok, State#state{statements=NewStatements}};
 
 handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
@@ -182,14 +278,43 @@ correct_params([{Type,Dir,Val}|Params], Acc0) when is_atom(Type), is_atom(Dir), 
     end,
     [{NewType,NewDir,NewVal} | Acc1].
 
-exec(State, Port, SessionId, Query, Params) ->
+exec(State, Port, SessionId, Query, Params, MaxRows, UseCache) ->
     case oci_port:call(Port, SessionId, {?EXEC_SQL, SessionId, binary:list_to_bin(Query), Params}) of
         {executed, no_ret} ->
-            {reply, ok, State#state{statement=undefined}};
+            {reply, ok, State};
         {executed, RetArgs} ->
-            {reply, {ok, RetArgs}, State#state{statement=undefined}};
+            {reply, {ok, RetArgs}, State};
         {columns, StatementHandle, Columns} ->
-            {reply, ok, State#state{statement=StatementHandle, columns=Columns}};
+            StatementRef = make_ref(),
+            Results = ets:new(results, [ordered_set]),
+            Statement = #statement{
+                ref=StatementRef,
+                handle=StatementHandle,
+                columns=Columns,
+                max_rows=MaxRows,
+                results=Results,
+                use_cache=UseCache
+            },
+            Statements = State#state.statements ++ [{StatementRef, Statement}],
+            {reply, {statement, {?MODULE, StatementRef, self()}}, State#state{statements=Statements}};
         {error, Reason} ->
-            {reply, {error, Reason}, State#state{statement=undefined}}
+            {reply, {error, Reason}, State}
     end.
+
+fetch(Port, SessionId, StatementHandle, ResultsTid, CacheSize) ->
+    case oci_port:call(Port, SessionId, {?FETCH_ROWS, SessionId, StatementHandle}) of
+        {{rows, Rows}, NewStatus} ->
+            NrOfRows = length(Rows),
+            ets:insert(ResultsTid, [{I, list_to_tuple(R)} || {I,R} <- lists:zip(lists:seq(CacheSize + 1, CacheSize + NrOfRows), Rows)]),
+            {NewStatus, NrOfRows};
+        {error, Reason} ->
+            %% maybe we should close the statement here (and gc resuls)
+            {error, Reason}
+    end.
+
+get_keys(Start, End) when (Start > 0) and (End > 0) ->
+    lists:seq(Start, End);
+get_keys(Start, End) when (Start =< 0) ->
+    get_keys(1, End);
+get_keys(Start, End) when (End =< 0) ->
+    get_keys(Start, 1).

@@ -46,4 +46,5 @@
 
 %% types
 -type session() :: {oci_session, pid()}.  %% parameterized Module
+-type statement() :: {oci_session, any(), pid()}. %% parameterized Module
 -type ora_error() :: string().            %% Oracle Error String
