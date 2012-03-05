@@ -20,7 +20,9 @@
 %% API
 -export([
     start_link/1,
-    stop/0,
+    stop/1,
+    enable_logging/1,
+    disable_logging/1,
     call/2,
     call/3]).
 
@@ -37,7 +39,7 @@
     port,
     port_mod = erlang,
     status = disconnected,
-    logging = ?DBG_FLAG_ON,
+    logging = ?DBG_FLAG_OFF,
     refs = ets:new(oci_refs, [])
 }).
 
@@ -45,18 +47,19 @@
 start_link(Options) ->
     case Options of
         undefined ->
-            gen_server:start_link(?MODULE, [erlang], []);
+            gen_server:start_link(?MODULE, [erlang, false], []);
         Options when is_list(Options)->
+            Logging = proplists:get_value(logging, Options, false),
             case proplists:get_value(mock_port, Options) of
                 undefined ->
-                    gen_server:start_link(?MODULE, [erlang], []);
+                    gen_server:start_link(?MODULE, [erlang, Logging], []);
                 Mock  ->
-                    gen_server:start_link(?MODULE, [Mock], [])
+                    gen_server:start_link(?MODULE, [Mock, Logging], [])
             end
     end.
 
-stop() ->
-    gen_server:call(?MODULE, stop).
+stop(PortPid) ->
+    gen_server:call(PortPid, stop).
 
 call(PortPid, Msg) ->
     gen_server:call(PortPid, {port_synch_call, Msg}, ?PORT_TIMEOUT).
@@ -64,18 +67,24 @@ call(PortPid, Msg) ->
 call(PortPid, SessionId, Msg) ->
     gen_server:call(PortPid, {port_call, SessionId, Msg}, ?PORT_TIMEOUT).
 
+enable_logging(PortPid) ->
+    gen_server:call(PortPid, enable_logging, ?PORT_TIMEOUT).
+
+disable_logging(PortPid) ->
+    gen_server:call(PortPid, disable_logging, ?PORT_TIMEOUT).
+
 %% Callbacks
-init([PortMod]) ->
+init([PortMod, Logging]) ->
     case os:find_executable(?EXE_NAME, "./priv/") of
         false ->
             case os:find_executable(?EXE_NAME, "./deps/erloci/priv/") of
                 false -> {stop, bad_executable};
-                Executable -> start_exe(PortMod, Executable)
+                Executable -> start_exe(PortMod, Executable, Logging)
             end;
-        Executable -> start_exe(PortMod, Executable)
+        Executable -> start_exe(PortMod, Executable, Logging)
     end.
 
-start_exe(PortMod, Executable) ->
+start_exe(PortMod, Executable, Logging) ->
     PortOptions = [{packet, 4}, binary, exit_status, use_stdio, {args, [ "true" ]}],
     case (catch PortMod:open_port({spawn_executable, Executable}, PortOptions)) of
         {'EXIT', Reason} ->
@@ -84,8 +93,14 @@ start_exe(PortMod, Executable) ->
         Port ->
             io:fwrite("oci:init opened new port: ~p~n", [PortMod:port_info(Port)]),
             %% TODO -- Loggig it turned after port creation for the integration tests too run
-            PortMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_OFF})),
-            {ok, #state{status=connected, port=Port, port_mod=PortMod}}
+            case Logging of
+                true ->
+                    PortMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_ON})),
+                    {ok, #state{status=connected, port=Port, port_mod=PortMod, logging=?DBG_FLAG_ON}};
+                false ->
+                    PortMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_OFF})),
+                    {ok, #state{status=connected, port=Port, port_mod=PortMod, logging=?DBG_FLAG_OFF}}
+            end
     end.
 %% We force some Port commands to be executed in a
 %% synchronous manner, the main reason for this is
@@ -110,18 +125,22 @@ receive_loop(Port, L) ->
                     receive_loop(Port, L)
             end
     end.
-
+handle_call(enable_logging, _From, #state{port=Port, port_mod=PMod} = State)->
+    true = PMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_ON})),
+    {reply, ok, State#state{logging=?DBG_FLAG_ON}};
+handle_call(disable_logging, _From, #state{port=Port, port_mod=PMod} = State)->
+    true = PMod:port_command(Port, term_to_binary({?R_DEBUG_MSG, ?DBG_FLAG_OFF})),
+    {reply, ok, State#state{logging=?DBG_FLAG_OFF}};
 handle_call({port_synch_call, Msg}, _From, #state{status=connected, port=Port, port_mod=PMod, logging=L} = State) ->
     true = PMod:port_command(Port, term_to_binary(Msg)),
     {ok, Reply} = receive_loop(Port, L),
     {reply, Reply, State};
-
 handle_call({port_call, SessionId, Msg}, From, #state{status=connected, port=Port, port_mod=PMod, refs=Refs} = State) ->
     ets:insert(Refs, {SessionId, From}),
     true = PMod:port_command(Port, term_to_binary(Msg)),
     {noreply, State}. %% we will reply inside handle_info_result
 
-handle_cast(_Req, State) ->
+handle_cast(_Msg, State) ->
     {noreply, State}.
 
 %% We got a reply from a previously sent command to the Port.  Relay it to the caller.

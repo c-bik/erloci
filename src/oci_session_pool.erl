@@ -22,6 +22,8 @@
     start_link/6,
     start_link/4,
     stop/1,
+    enable_log/1,
+    disable_log/1,
     get_session/1]).
 
 %% gen_server callbacks
@@ -94,6 +96,16 @@ stop(SessionPoolPid) ->
 get_session(SessionPoolPid) ->
     gen_server:call(SessionPoolPid, get_session).
 
+%% @doc enable log output from the port
+-spec enable_log(SessionPoolPid::pid()) -> ok.
+enable_log(SessionPoolPid) ->
+    gen_server:call(SessionPoolPid, enable_log).
+
+%% @doc disable log output from the port
+-spec disable_log(SessionPoolPid::pid()) -> ok.
+disable_log(SessionPoolPid) ->
+    gen_server:call(SessionPoolPid, disable_log).
+
 %% TODO
 %%log(SessionPoolPid, enable) ->
 %%    gen_server:call(SessionPoolPid, enable_log);
@@ -126,10 +138,10 @@ handle_call(get_session, _From, #state{port=PortPid} = State) ->
     {reply, {oci_session, SessionPid}, State};
 
 handle_call(enable_log, _From, #state{port=PortPid} = State) ->
-    oci_port:call(PortPid, {?R_DEBUG_MSG, ?DBG_FLAG_ON}),
+    oci_port:enable_logging(PortPid),
     {reply, ok, State};
 handle_call(disable_log, _From, #state{port=PortPid} = State) ->
-    oci_port:call(PortPid, {?R_DEBUG_MSG, ?DBG_FLAG_OFF}),
+    oci_port:disable_logging(PortPid),
     {reply, ok, State}.
 
 handle_cast(_Request, State) ->
