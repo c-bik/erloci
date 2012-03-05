@@ -132,7 +132,7 @@ handle_call({prev_rows, StatementRef}, _From, #state{statements=Statements} = St
     } = Statement,
 
     case UseCache of
-        true ->
+        true when Offset > 0 ->
             {NewOffset, Keys} =
             case Offset - MaxRows of
                 R when R > 0 ->
@@ -157,7 +157,7 @@ handle_call({prev_rows, StatementRef}, _From, #state{statements=Statements} = St
                 cursor={NewOffset, NewCursor, QStatus}},
             NewStatements = proplists:delete(StatementRef, Statements) ++ [{StatementRef, NewStatement}],
             {reply, Rows, State#state{statements=NewStatements}};
-        false ->
+        _ ->
             {reply, [], State}
     end;
 
