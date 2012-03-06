@@ -305,7 +305,7 @@ fetch(Port, SessionId, StatementHandle, ResultsTid, CacheSize) ->
     case oci_port:call(Port, SessionId, {?FETCH_ROWS, SessionId, StatementHandle}) of
         {{rows, Rows}, NewStatus} ->
             NrOfRows = length(Rows),
-            ets:insert(ResultsTid, [{I, list_to_tuple(R)} || {I,R} <- lists:zip(lists:seq(CacheSize + 1, CacheSize + NrOfRows), Rows)]),
+            ets:insert(ResultsTid, [{I, R} || {I,R} <- lists:zip(lists:seq(CacheSize + 1, CacheSize + NrOfRows), Rows)]),
             {NewStatus, NrOfRows};
         {error, Reason} ->
             %% maybe we should close the statement here (and gc resuls)
