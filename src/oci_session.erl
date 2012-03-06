@@ -189,7 +189,8 @@ handle_call({next_rows, StatementRef}, _From, #state{port=Port, session_id=Sessi
         {'$end_of_table', BinRef} ->
             {[], {'$end_of_table', BinRef}};
         {} ->
-            ets:match_object(Results, '$1', MaxRows);
+            %% first call to next_rows
+            match_object(ets:match_object(Results, '$1', MaxRows), undefined);
         Cursor when (UseCache == false) and (NrOfNewCacheEntries > 0) ->
             {_,_,_,_,BinRef,_,_,_} = Cursor,
             match_object(ets:match_object(Results, '$1', MaxRows), BinRef);

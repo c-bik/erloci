@@ -14,7 +14,7 @@
 
 -module(oci_session_pool).
 -behaviour(gen_server).
-
+-include_lib("eunit/include/eunit.hrl").
 -include("oci.hrl").
 
 %% API
@@ -24,6 +24,8 @@
     stop/1,
     enable_log/1,
     disable_log/1,
+    get_port/1,
+    get_poolname/1,
     get_session/1]).
 
 %% gen_server callbacks
@@ -34,11 +36,6 @@
     handle_info/2,
     terminate/2,
     code_change/3]).
-
-%% test exports
--export([
-    integration_test/5,
-    mock_test/0]).
 
 -record(state, {
         port,
@@ -106,11 +103,15 @@ enable_log(SessionPoolPid) ->
 disable_log(SessionPoolPid) ->
     gen_server:call(SessionPoolPid, disable_log).
 
-%% TODO
-%%log(SessionPoolPid, enable) ->
-%%    gen_server:call(SessionPoolPid, enable_log);
-%%log(SessionPoolPid, disable) ->
-%%    gen_server:call(SessionPoolPid, disable_log).
+%% @doc returns the port
+-spec get_port(SessionPoolPid::pid()) -> port().
+get_port(SessionPoolPid) ->
+    gen_server:call(SessionPoolPid, get_port).
+
+%% @doc returns the poolname
+-spec get_poolname(SessionPoolPid::pid()) -> string().
+get_poolname(SessionPoolPid) ->
+    gen_server:call(SessionPoolPid, get_poolname).
 
 %% Callbacks
 init([TnsNameStr, UserName, Password, Options]) ->
@@ -128,6 +129,10 @@ init([TnsNameStr, UserName, Password, Options]) ->
 handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
 
+handle_call(get_port, _From, #state{port=PortPid} = State) ->
+    {reply, {ok, PortPid}, State};
+handle_call(get_poolname, _From, #state{pool_name=Poolname} = State) ->
+    {reply, {ok, Poolname}, State};
 handle_call(get_session, _From, #state{port=PortPid} = State) ->
     {ok, SessionPid} = oci_session:open(PortPid, self()),
     %% we return a parameterized module here, we don't use
@@ -177,6 +182,15 @@ integration_test(Host, Port, Service, UserName, Password) ->
     stopped = Session:close(),
     stopped = oci_session_pool:stop(Pool).
 
+mock_suite_test_() ->
+    {
+        setup, fun()->ok end,
+        [
+            fun() -> mock_test() end,
+            fun() -> mock_empty_table_test() end
+        ]
+    }.
+
 mock_test() ->
     {ok, Pool} = oci_session_pool:start_link("127.0.0.1", 1521, {service, "db.local"}, "dba", "supersecret", [{port_options, [{mock_port, oci_port_mock}]}]),
     Session = oci_session_pool:get_session(Pool),
@@ -223,6 +237,14 @@ mock_test() ->
 
     stopped = Session:close(),
     stopped = oci_session_pool:stop(Pool).
+
+mock_empty_table_test() ->
+    {ok, Pool} = oci_session_pool:start_link("127.0.0.1", 1521, {service, "db.local"}, "dba", "supersecret", [{port_options, [{mock_port, oci_port_empty_table_mock}]}]),
+    Session = oci_session_pool:get_session(Pool),
+
+    {statement, Statement1} = Session:execute_sql("select * from test_erloci", [], 10),
+    [] = Statement1:next_rows(),
+    ok = Statement1:close().
 
 insert_rows(Session) ->
     [
