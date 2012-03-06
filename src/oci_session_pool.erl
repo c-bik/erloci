@@ -91,17 +91,17 @@ stop(SessionPoolPid) ->
 %% @doc get a new Session from the SessionPool specified. We return you a parameterized module
 -spec get_session(SessionPoolPid::pid()) -> Session::session().
 get_session(SessionPoolPid) ->
-    gen_server:call(SessionPoolPid, get_session).
+    gen_server:call(SessionPoolPid, get_session, ?PORT_TIMEOUT).
 
 %% @doc enable log output from the port
 -spec enable_log(SessionPoolPid::pid()) -> ok.
 enable_log(SessionPoolPid) ->
-    gen_server:call(SessionPoolPid, enable_log).
+    gen_server:call(SessionPoolPid, enable_log, ?PORT_TIMEOUT).
 
 %% @doc disable log output from the port
 -spec disable_log(SessionPoolPid::pid()) -> ok.
 disable_log(SessionPoolPid) ->
-    gen_server:call(SessionPoolPid, disable_log).
+    gen_server:call(SessionPoolPid, disable_log, ?PORT_TIMEOUT).
 
 %% @doc returns the port
 -spec get_port(SessionPoolPid::pid()) -> port().

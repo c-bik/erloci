@@ -66,9 +66,9 @@ open(Port, Pool) ->
 %% @doc closes a session, can be used in a parameterized fashion Session:close() or Statement:close()
 -spec close(session() | statement()) -> stopped|ok.
 close({?MODULE, Pid}) ->
-    gen_server:call(Pid, stop);
+    gen_server:call(Pid, stop, ?PORT_TIMEOUT);
 close({?MODULE, StatementRef, Pid}) ->
-    gen_server:call(Pid, {close_statement, StatementRef}).
+    gen_server:call(Pid, {close_statement, StatementRef}, ?PORT_TIMEOUT).
 
 %% @doc Executes an UPDATE/DELETE/INSERT SQL query, can be used in a parameterized fashion Session:execute_sql(...)
 -spec execute_sql(Query :: string()|binary(),
@@ -85,20 +85,20 @@ close({?MODULE, StatementRef, Pid}) ->
 execute_sql(Query, Params, MaxRows, {?MODULE, Pid}) when is_list(Query) ->
     execute_sql(Query, Params, MaxRows, false, {?MODULE, Pid}).
 execute_sql(Query, Params, MaxRows, UseCache, {?MODULE, Pid}) when is_list(Query) ->
-    gen_server:call(Pid, {execute_sql, Query, Params, MaxRows, UseCache}).
+    gen_server:call(Pid, {execute_sql, Query, Params, MaxRows, UseCache}, ?PORT_TIMEOUT).
 
 %% @doc Fetches the resulting rows of a previously executed sql statement, can be used in a parameterized fashion Session:get_rows()
 -spec next_rows(Statement::statement()) ->  [Row::tuple()] | {error, Reason::ora_error()}.
 next_rows({?MODULE, StatementRef, Pid}) ->
-    gen_server:call(Pid, {next_rows, StatementRef}).
+    gen_server:call(Pid, {next_rows, StatementRef}, ?PORT_TIMEOUT).
 
 prev_rows({?MODULE, StatementRef, Pid}) ->
-    gen_server:call(Pid, {prev_rows, StatementRef}).
+    gen_server:call(Pid, {prev_rows, StatementRef}, ?PORT_TIMEOUT).
 
 %% @doc Fetches the column information of the last executed query, can be used in a parameterized fashion Session:get_columns()
 -spec get_columns(Statement::statement()) -> [{ColumnName::string(), Type::atom(), Length::integer()}].
 get_columns({?MODULE, StatementRef, Pid}) ->
-    gen_server:call(Pid, {get_columns, StatementRef}).
+    gen_server:call(Pid, {get_columns, StatementRef}, ?PORT_TIMEOUT).
 
 %% Callbacks
 init([Port, Pool]) ->
