@@ -191,17 +191,11 @@ handle_call({next_rows, StatementRef}, _From, #state{port=Port, session_id=Sessi
         {} ->
             ets:match_object(Results, '$1', MaxRows);
         Cursor when (UseCache == false) and (NrOfNewCacheEntries > 0) ->
-            ets:match_object(Results, '$1', MaxRows);
+            {_,_,_,_,BinRef,_,_,_} = Cursor,
+            match_object(ets:match_object(Results, '$1', MaxRows), BinRef);
         Cursor ->
             {_,_,_,_,BinRef,_,_,_} = Cursor,
-            case ets:match_object(Cursor) of
-                '$end_of_table' ->
-                    {[], {'$end_of_table', BinRef}};
-                {R, '$end_of_table'} ->
-                    {R, {'$end_of_table', BinRef}};
-                Res ->
-                    Res
-            end
+            match_object(ets:match_object(Cursor), BinRef)
     end,
 
     %% delete results if no_cache
@@ -318,3 +312,10 @@ get_keys(Start, End) when (Start =< 0) ->
     get_keys(1, End);
 get_keys(Start, End) when (End =< 0) ->
     get_keys(Start, 1).
+
+match_object('$end_of_table', CursorBinRef) ->
+    {[], {'$end_of_table', CursorBinRef}};
+match_object({Rows, '$end_of_table'}, CursorBinRef) ->
+    {Rows, {'$end_of_table', CursorBinRef}};
+match_object(Rows, _CursorBinRef) ->
+    Rows.
