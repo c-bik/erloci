@@ -1,2 +1,11 @@
 *.o
 oci.log
+*.obj
+c_src/Debug/
+*.ncb
+*.suo
+c_src/x64/
+*.user
+*.beam
+*.exe
+*.manifest
